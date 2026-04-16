@@ -58,6 +58,27 @@ def _check_auth(token: str | None) -> None:
         raise HTTPException(401, "unauthorized")
 
 
+def _to_number(s: Any) -> Any:
+    """把 '123' / '88.33' 转成 int / float；转不动原样返回。"""
+    if isinstance(s, (int, float)) or not isinstance(s, str):
+        return s
+    try:
+        f = float(s)
+        return int(f) if f.is_integer() else round(f, 2)
+    except ValueError:
+        return s
+
+
+def _normalize_numeric_lists(obj: Any) -> Any:
+    """递归把所有「全是数字字符串」的 list 转成数字 list，顺带规范嵌套 dict。"""
+    if isinstance(obj, dict):
+        return {k: _normalize_numeric_lists(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        converted = [_to_number(x) if isinstance(x, str) else _normalize_numeric_lists(x) for x in obj]
+        return converted
+    return obj
+
+
 def _derive_date(payload: dict[str, Any]) -> str:
     """从 payload 推 YYYY-MM-DD：优先 Date 字段，其次 timestamp，最后用服务器当日。"""
     raw = payload.get("Date") or payload.get("date") or payload.get("timestamp")
@@ -83,6 +104,8 @@ async def ingest(request: Request, x_auth_token: str | None = Header(None)) -> d
         raise HTTPException(400, "payload must be a JSON object")
 
     print(f"[POST /health] body={json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+    payload = _normalize_numeric_lists(payload)
 
     day = _derive_date(payload)
     payload["date"] = day
