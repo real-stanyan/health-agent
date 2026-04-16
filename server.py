@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -49,6 +49,15 @@ async def ingest(request: Request) -> dict[str, Any]:
         payload["timestamp"] = datetime.now(TZ).isoformat()
 
     payload["_received_at"] = datetime.now(TZ).isoformat()
+
+    # Shortcuts 隔天发送，Date 减一天还原为实际数据日期
+    if "Date" in payload and payload["Date"]:
+        try:
+            dt = datetime.strptime(payload["Date"], "%d %b %Y at %I:%M %p")
+            dt -= timedelta(days=1)
+            payload["Date"] = dt.strftime("%-d %b %Y at %-I:%M %p").replace("AM", "am").replace("PM", "pm")
+        except ValueError:
+            pass  # 格式不匹配则保持原值
 
     records = _load()
     records.append(payload)
