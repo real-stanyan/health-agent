@@ -196,8 +196,25 @@ function parseSleepSegments(raw) {
   return segments.length > 0 ? segments : null;
 }
 
-function parseSleepRaw(raw) {
-  const segs = parseSleepSegments(raw);
+/**
+ * Filter sleep segments to only include the night belonging to `dateStr` (YYYY-MM-DD).
+ * A "night" = segments whose start falls between dateStr 12:00 (noon) and dateStr+1 12:00.
+ * This captures going to bed on the evening of dateStr and waking up the next morning.
+ */
+function filterSleepForDate(segments, dateStr) {
+  if (!segments || !dateStr) return segments;
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d)) return segments;
+  const nightStart = new Date(d); nightStart.setHours(12, 0, 0, 0); // noon of dateStr
+  const nightEnd = new Date(d); nightEnd.setDate(nightEnd.getDate() + 1); nightEnd.setHours(12, 0, 0, 0); // noon next day
+  const filtered = segments.filter(s => s.start >= nightStart && s.start < nightEnd);
+  return filtered.length > 0 ? filtered : null;
+}
+
+function parseSleepRaw(raw, dateStr) {
+  let segs = parseSleepSegments(raw);
+  if (!segs) return null;
+  if (dateStr) segs = filterSleepForDate(segs, dateStr);
   if (!segs) return null;
   const stages = { core: 0, deep: 0, rem: 0, awake: 0 };
   for (const s of segs) {
@@ -213,8 +230,9 @@ function parseSleepRaw(raw) {
 const SLEEP_STAGES = ['Awake', 'REM', 'Core', 'Deep'];
 const SLEEP_COLORS = { awake: '#f87171', rem: '#22d3ee', core: '#60a5fa', deep: '#7c3aed' };
 
-function drawSleepTimeline(canvasId, raw) {
-  const segs = parseSleepSegments(raw);
+function drawSleepTimeline(canvasId, raw, dateStr) {
+  let segs = parseSleepSegments(raw);
+  if (dateStr) segs = filterSleepForDate(segs, dateStr);
   if (!segs || segs.length === 0) return;
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
@@ -332,7 +350,7 @@ function drawSleepTimeline(canvasId, raw) {
 }
 
 function renderStats(rec) {
-  const sleep = parseSleepRaw(rec?.sleep_raw);
+  const sleep = parseSleepRaw(rec?.sleep_raw, rec?.date);
   const hr = rec?.Heart_Rate || {};
   const spo2 = rec?.Blood_Oxygen || {};
   const kcal = rec?.Active_Kcal;
@@ -422,7 +440,7 @@ function showDay(date) {
   }
 
   // Sleep breakdown donut
-  const sleep = parseSleepRaw(rec.sleep_raw);
+  const sleep = parseSleepRaw(rec.sleep_raw, date);
   if (sleep) {
     sections.push('<div class="chart-card"><h3>Sleep Breakdown</h3><div style="height:260px"><canvas id="sleepDonut"></canvas></div></div>');
   }
@@ -447,7 +465,7 @@ function showDay(date) {
 
   // Draw sleep timeline
   if (rec.sleep_raw) {
-    drawSleepTimeline('sleepTimeline', rec.sleep_raw);
+    drawSleepTimeline('sleepTimeline', rec.sleep_raw, date);
   }
 
   // Draw sleep donut
