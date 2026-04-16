@@ -236,9 +236,10 @@ function drawSleepTimeline(canvasId, raw) {
   const bandH = chartH / 4;
 
   const toX = t => pad.left + ((t - minT) / (maxT - minT)) * chartW;
+  const stageMap = { awake: 0, rem: 1, core: 2, deep: 3 };
   const stageY = stage => {
-    const idx = SLEEP_STAGES.indexOf(stage.charAt(0).toUpperCase() + stage.slice(1));
-    return pad.top + (idx >= 0 ? idx : 0) * bandH;
+    const idx = stageMap[stage.toLowerCase()] ?? 0;
+    return pad.top + idx * bandH;
   };
 
   ctx.clearRect(0, 0, W, H);
