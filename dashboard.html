@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Health Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<style>
+:root {
+  --bg: #0f1117;
+  --card: #1a1d27;
+  --border: #2a2d3a;
+  --text: #e1e4ed;
+  --muted: #8b8fa3;
+  --accent: #6c63ff;
+  --green: #34d399;
+  --red: #f87171;
+  --orange: #fbbf24;
+  --blue: #60a5fa;
+  --pink: #f472b6;
+  --cyan: #22d3ee;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+.header {
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .date { color: var(--muted); font-size: 14px; }
+.auth-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  flex-direction: column;
+  gap: 16px;
+}
+.auth-screen input {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 12px 16px;
+  border-radius: 8px;
+  width: 320px;
+  font-size: 14px;
+  outline: none;
+}
+.auth-screen input:focus { border-color: var(--accent); }
+.auth-screen button, .btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 10px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.auth-screen button:hover, .btn:hover { opacity: 0.9; }
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 24px 32px;
+}
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+.stat-card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+.stat-card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  gap: 20px;
+  padding: 0 32px 32px;
+}
+.chart-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+.chart-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.chart-card canvas { width: 100% !important; }
+.loading { text-align: center; padding: 80px; color: var(--muted); }
+.error { color: var(--red); text-align: center; padding: 20px; }
+.day-picker {
+  padding: 0 32px 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.day-picker .label { color: var(--muted); font-size: 13px; margin-right: 4px; }
+.day-btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.day-btn.active { background: var(--accent); border-color: var(--accent); }
+#app { display: none; }
+@media (max-width: 600px) {
+  .stats { padding: 16px; gap: 12px; }
+  .charts { grid-template-columns: 1fr; padding: 0 16px 16px; }
+  .header { padding: 16px; }
+  .day-picker { padding: 0 16px 8px; }
+}
+</style>
+</head>
+<body>
+
+<div class="auth-screen" id="auth">
+  <h2>Health Dashboard</h2>
+  <input type="password" id="tokenInput" placeholder="Auth Token" />
+  <button onclick="login()">Enter</button>
+</div>
+
+<div id="app">
+  <div class="header">
+    <h1>Health Dashboard</h1>
+    <span class="date" id="headerDate"></span>
+  </div>
+  <div class="stats" id="statsRow"></div>
+  <div class="day-picker" id="dayPicker"></div>
+  <div class="charts" id="chartsGrid"></div>
+</div>
+
+<script>
+const TOKEN_KEY = 'health_auth_token';
+let allRecords = [];
+let charts = {};
+
+function login() {
+  const t = document.getElementById('tokenInput').value.trim();
+  if (!t) return;
+  localStorage.setItem(TOKEN_KEY, t);
+  init();
+}
+
+function normalizeDate(rec) {
+  if (rec.date) return rec.date;
+  if (rec.timestamp) {
+    try { return new Date(rec.timestamp).toISOString().slice(0, 10); } catch {}
+  }
+  if (rec.Date) {
+    try {
+      const cleaned = rec.Date.replace(/\u202f/g, ' ');
+      return new Date(cleaned).toISOString().slice(0, 10);
+    } catch {}
+  }
+  return 'unknown';
+}
+
+async function fetchData(token) {
+  const headers = {};
+  if (token) headers['X-Auth-Token'] = token;
+  const r = await fetch('/history', { headers });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const records = j.records || [];
+  records.forEach(rec => { rec.date = normalizeDate(rec); });
+  return records;
+}
+
+function parseSleepRaw(raw) {
+  if (!raw) return null;
+  const stages = { core: 0, deep: 0, rem: 0, awake: 0 };
+  for (const line of raw.split('\n')) {
+    const sm = line.match(/^\[(\w+)\]/i);
+    const dm = line.match(/\[(\d+(?::\d+){1,2})\]\s*$/);
+    if (!sm || !dm) continue;
+    const stage = sm[1].toLowerCase();
+    const parts = dm[1].split(':').map(Number);
+    let secs;
+    if (parts.length === 3) secs = parts[0]*3600 + parts[1]*60 + parts[2];
+    else if (parts.length === 2) secs = parts[0]*60 + parts[1];
+    else secs = parts[0];
+    const hrs = secs / 3600;
+    if (stage in stages) stages[stage] += hrs;
+    else if (stage === 'asleep' || stage === 'inbed') { /* skip compound */ }
+    else stages.core += hrs;
+  }
+  stages.total = stages.core + stages.deep + stages.rem;
+  stages.totalWithAwake = stages.total + stages.awake;
+  return stages;
+}
+
+function renderStats(records) {
+  const latest = records[records.length - 1];
+  const sleep = parseSleepRaw(latest?.sleep_raw);
+  const hr = latest?.Heart_Rate || {};
+  const spo2 = latest?.Blood_Oxygen || {};
+  const kcal = latest?.Active_Kcal;
+
+  const items = [];
+  if (sleep) items.push({ label: 'Sleep', value: sleep.total.toFixed(1) + 'h', sub: `Total ${sleep.totalWithAwake.toFixed(1)}h incl. awake`, color: var_color('accent') });
+  if (hr.HR_AVG) items.push({ label: 'Avg Heart Rate', value: Math.round(hr.HR_AVG) + '', sub: `${hr.HR_MIN}–${hr.HR_MAX} bpm`, color: var_color('red') });
+  if (spo2.SPO2_AVG) items.push({ label: 'Avg SpO₂', value: spo2.SPO2_AVG.toFixed(1) + '%', sub: `Min ${spo2.SPO2_MIN}%`, color: var_color('cyan') });
+  if (kcal != null) items.push({ label: 'Active Calories', value: Math.round(kcal) + '', sub: kcal >= 500 ? 'Goal met ✓' : `${Math.round(500 - kcal)} to goal`, color: kcal >= 500 ? var_color('green') : var_color('orange') });
+  items.push({ label: 'Days Tracked', value: records.length + '', sub: records.length > 1 ? `${records[0].date} – ${records[records.length-1].date}` : '', color: var_color('muted') });
+
+  document.getElementById('statsRow').innerHTML = items.map(i => `
+    <div class="stat-card">
+      <div class="label">${i.label}</div>
+      <div class="value" style="color:${i.color}">${i.value}</div>
+      <div class="sub">${i.sub}</div>
+    </div>
+  `).join('');
+}
+
+function var_color(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue('--' + name).trim();
+}
+
+function chartColors() {
+  return {
+    accent: var_color('accent'),
+    green: var_color('green'),
+    red: var_color('red'),
+    orange: var_color('orange'),
+    blue: var_color('blue'),
+    pink: var_color('pink'),
+    cyan: var_color('cyan'),
+    muted: var_color('muted'),
+    text: var_color('text'),
+    border: var_color('border'),
+  };
+}
+
+function baseOpts(title) {
+  const c = chartColors();
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: c.text, boxWidth: 12, padding: 12 } },
+      title: { display: false },
+    },
+    scales: {
+      x: { ticks: { color: c.muted }, grid: { color: c.border + '44' } },
+      y: { ticks: { color: c.muted }, grid: { color: c.border + '44' } },
+    },
+  };
+}
+
+function renderTrendCharts(records) {
+  const c = chartColors();
+  const dates = records.map(r => r.date);
+
+  const grid = document.getElementById('chartsGrid');
+  grid.innerHTML = `
+    <div class="chart-card"><h3>Sleep Breakdown</h3><div style="height:260px"><canvas id="sleepChart"></canvas></div></div>
+    <div class="chart-card"><h3>Heart Rate Trend</h3><div style="height:260px"><canvas id="hrChart"></canvas></div></div>
+    <div class="chart-card"><h3>Blood Oxygen Trend</h3><div style="height:260px"><canvas id="spo2Chart"></canvas></div></div>
+    <div class="chart-card"><h3>Active Calories</h3><div style="height:260px"><canvas id="kcalChart"></canvas></div></div>
+    <div class="chart-card" id="hrDetailCard" style="display:none"><h3>Heart Rate Detail — <span id="hrDetailDate"></span></h3><div style="height:300px"><canvas id="hrDetailChart"></canvas></div></div>
+    <div class="chart-card" id="spo2DetailCard" style="display:none"><h3>SpO₂ Detail — <span id="spo2DetailDate"></span></h3><div style="height:300px"><canvas id="spo2DetailChart"></canvas></div></div>
+  `;
+
+  // Sleep stacked bar
+  const sleepData = records.map(r => parseSleepRaw(r.sleep_raw));
+  charts.sleep = new Chart(document.getElementById('sleepChart'), {
+    type: 'bar',
+    data: {
+      labels: dates,
+      datasets: [
+        { label: 'Deep', data: sleepData.map(s => s?.deep || 0), backgroundColor: c.accent },
+        { label: 'Core', data: sleepData.map(s => s?.core || 0), backgroundColor: c.blue },
+        { label: 'REM', data: sleepData.map(s => s?.rem || 0), backgroundColor: c.cyan },
+        { label: 'Awake', data: sleepData.map(s => s?.awake || 0), backgroundColor: c.muted + '88' },
+      ],
+    },
+    options: { ...baseOpts(), scales: { ...baseOpts().scales, x: { ...baseOpts().scales.x, stacked: true }, y: { ...baseOpts().scales.y, stacked: true, title: { display: true, text: 'Hours', color: c.muted } } } },
+  });
+
+  // HR trend
+  const hrAvg = records.map(r => r.Heart_Rate?.HR_AVG ?? null);
+  const hrMax = records.map(r => r.Heart_Rate?.HR_MAX ?? null);
+  const hrMin = records.map(r => r.Heart_Rate?.HR_MIN ?? null);
+  charts.hr = new Chart(document.getElementById('hrChart'), {
+    type: 'line',
+    data: {
+      labels: dates,
+      datasets: [
+        { label: 'Avg', data: hrAvg, borderColor: c.red, backgroundColor: c.red + '22', fill: false, tension: 0.3 },
+        { label: 'Max', data: hrMax, borderColor: c.orange, borderDash: [4,4], fill: false, tension: 0.3 },
+        { label: 'Min', data: hrMin, borderColor: c.blue, borderDash: [4,4], fill: false, tension: 0.3 },
+      ],
+    },
+    options: { ...baseOpts(), scales: { ...baseOpts().scales, y: { ...baseOpts().scales.y, title: { display: true, text: 'BPM', color: c.muted } } } },
+  });
+
+  // SpO2 trend
+  const spo2Avg = records.map(r => r.Blood_Oxygen?.SPO2_AVG ?? null);
+  const spo2Min = records.map(r => r.Blood_Oxygen?.SPO2_MIN ?? null);
+  charts.spo2 = new Chart(document.getElementById('spo2Chart'), {
+    type: 'line',
+    data: {
+      labels: dates,
+      datasets: [
+        { label: 'Avg', data: spo2Avg, borderColor: c.cyan, fill: false, tension: 0.3 },
+        { label: 'Min', data: spo2Min, borderColor: c.pink, borderDash: [4,4], fill: false, tension: 0.3 },
+      ],
+    },
+    options: { ...baseOpts(), scales: { ...baseOpts().scales, y: { ...baseOpts().scales.y, min: 90, max: 100, title: { display: true, text: '%', color: c.muted } } } },
+  });
+
+  // Kcal bar
+  const kcals = records.map(r => r.Active_Kcal ?? 0);
+  charts.kcal = new Chart(document.getElementById('kcalChart'), {
+    type: 'bar',
+    data: {
+      labels: dates,
+      datasets: [
+        { label: 'Active kcal', data: kcals, backgroundColor: kcals.map(k => k >= 500 ? c.green + 'cc' : c.orange + 'cc'), borderRadius: 4 },
+      ],
+    },
+    options: {
+      ...baseOpts(),
+      plugins: {
+        ...baseOpts().plugins,
+        annotation: undefined,
+      },
+      scales: {
+        ...baseOpts().scales,
+        y: { ...baseOpts().scales.y, title: { display: true, text: 'kcal', color: c.muted } },
+      },
+    },
+    plugins: [{
+      id: 'goalLine',
+      afterDraw(chart) {
+        const y = chart.scales.y.getPixelForValue(500);
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.strokeStyle = c.red;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(chart.chartArea.left, y);
+        ctx.lineTo(chart.chartArea.right, y);
+        ctx.stroke();
+        ctx.fillStyle = c.red;
+        ctx.font = '11px sans-serif';
+        ctx.fillText('Goal 500', chart.chartArea.right - 52, y - 5);
+        ctx.restore();
+      }
+    }],
+  });
+
+  // Day picker for detail charts
+  renderDayPicker(records);
+}
+
+function renderDayPicker(records) {
+  const picker = document.getElementById('dayPicker');
+  const withHR = records.filter(r => r.Heart_Rate?.HR_SERIES?.length > 0);
+  if (withHR.length === 0) {
+    picker.innerHTML = '';
+    return;
+  }
+  picker.innerHTML = '<span class="label">Detail view:</span>' + withHR.map(r =>
+    `<button class="day-btn" onclick="showDetail('${r.date}')">${r.date}</button>`
+  ).join('');
+}
+
+function showDetail(date) {
+  document.querySelectorAll('.day-btn').forEach(b => b.classList.toggle('active', b.textContent === date));
+  const rec = allRecords.find(r => r.date === date);
+  if (!rec) return;
+  const c = chartColors();
+
+  // HR detail
+  const hr = rec.Heart_Rate || {};
+  if (hr.HR_SERIES?.length > 0) {
+    document.getElementById('hrDetailCard').style.display = '';
+    document.getElementById('hrDetailDate').textContent = date;
+    const labels = (hr.HR_TIMESTAMPS || []).map(t => {
+      try { return new Date(t).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }); }
+      catch { return t; }
+    });
+    if (labels.length === 0) hr.HR_SERIES.forEach((_, i) => labels.push(i));
+    if (charts.hrDetail) charts.hrDetail.destroy();
+    charts.hrDetail = new Chart(document.getElementById('hrDetailChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{ label: 'HR', data: hr.HR_SERIES, borderColor: c.red, backgroundColor: c.red + '11', fill: true, pointRadius: 0, borderWidth: 1.5, tension: 0.2 }],
+      },
+      options: { ...baseOpts(), plugins: { ...baseOpts().plugins, legend: { display: false } }, scales: { ...baseOpts().scales, x: { ...baseOpts().scales.x, ticks: { ...baseOpts().scales.x.ticks, maxTicksLimit: 12 } }, y: { ...baseOpts().scales.y, title: { display: true, text: 'BPM', color: c.muted } } } },
+    });
+  }
+
+  // SpO2 detail
+  const spo2 = rec.Blood_Oxygen || {};
+  if (spo2.SPO2_SERIES?.length > 0) {
+    document.getElementById('spo2DetailCard').style.display = '';
+    document.getElementById('spo2DetailDate').textContent = date;
+    const labels = (spo2.SPO2_TIMESTAMPS || []).map(t => {
+      try { return new Date(t).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }); }
+      catch { return t; }
+    });
+    if (charts.spo2Detail) charts.spo2Detail.destroy();
+    charts.spo2Detail = new Chart(document.getElementById('spo2DetailChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{ label: 'SpO₂', data: spo2.SPO2_SERIES, borderColor: c.cyan, backgroundColor: c.cyan + '11', fill: true, pointRadius: 2, borderWidth: 1.5, tension: 0.2 }],
+      },
+      options: { ...baseOpts(), plugins: { ...baseOpts().plugins, legend: { display: false } }, scales: { ...baseOpts().scales, x: { ...baseOpts().scales.x, ticks: { ...baseOpts().scales.x.ticks, maxTicksLimit: 10 } }, y: { ...baseOpts().scales.y, min: 90, max: 100, title: { display: true, text: '%', color: c.muted } } } },
+    });
+  }
+}
+
+function isLocal() {
+  return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+}
+
+async function init() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token && !isLocal()) { document.getElementById('auth').style.display = ''; return; }
+  document.getElementById('auth').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('app').innerHTML = '<div class="loading">Loading…</div>';
+
+  try {
+    allRecords = await fetchData(token);
+    if (allRecords.length === 0) {
+      document.getElementById('app').innerHTML = '<div class="loading">No data yet. Send health data from your iPhone first.</div>';
+      return;
+    }
+    document.getElementById('app').innerHTML = `
+      <div class="header"><h1>Health Dashboard</h1><span class="date" id="headerDate"></span></div>
+      <div class="stats" id="statsRow"></div>
+      <div class="day-picker" id="dayPicker"></div>
+      <div class="charts" id="chartsGrid"></div>
+    `;
+    const latest = allRecords[allRecords.length - 1];
+    document.getElementById('headerDate').textContent = `Latest: ${latest.date}`;
+    renderStats(allRecords);
+    renderTrendCharts(allRecords);
+    if (allRecords.some(r => r.Heart_Rate?.HR_SERIES?.length > 0)) {
+      showDetail(allRecords[allRecords.length - 1].date);
+    }
+  } catch (e) {
+    if (e.message.includes('401')) {
+      localStorage.removeItem(TOKEN_KEY);
+      document.getElementById('auth').style.display = '';
+      document.getElementById('app').style.display = 'none';
+    } else {
+      document.getElementById('app').innerHTML = `<div class="error">Error: ${e.message}</div>`;
+    }
+  }
+}
+
+init();
+</script>
+</body>
+</html>

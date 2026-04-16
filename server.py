@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 
 ROOT = Path(__file__).resolve().parent
 DATA_FILE = ROOT / "health_data.json"
@@ -70,6 +71,11 @@ def history() -> dict[str, Any]:
     return {"ok": True, "count": len(records), "records": records}
 
 
+@app.get("/dashboard")
+def dashboard() -> FileResponse:
+    return FileResponse(ROOT / "dashboard.html", media_type="text/html")
+
+
 @app.get("/")
 def root() -> dict[str, Any]:
-    return {"service": "apple-health-monitor", "endpoints": ["/health", "/latest", "/history"]}
+    return {"service": "apple-health-monitor", "endpoints": ["/health", "/latest", "/history", "/dashboard"]}
