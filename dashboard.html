@@ -187,8 +187,9 @@ function parseSleepSegments(raw) {
     if (!m) continue;
     const stage = m[1].toLowerCase();
     if (stage === 'asleep' || stage === 'inbed') continue;
-    const start = new Date(m[2].replace(/\u202f/g, ' '));
-    const end = new Date(m[3].replace(/\u202f/g, ' '));
+    const clean = s => s.replace(/\u202f/g, ' ').replace(' at ', ' ');
+    const start = new Date(clean(m[2]));
+    const end = new Date(clean(m[3]));
     if (isNaN(start) || isNaN(end)) continue;
     segments.push({ stage, start, end });
   }
