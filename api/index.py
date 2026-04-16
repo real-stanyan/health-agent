@@ -82,6 +82,8 @@ async def ingest(request: Request, x_auth_token: str | None = Header(None)) -> d
     if not isinstance(payload, dict):
         raise HTTPException(400, "payload must be a JSON object")
 
+    print(f"[POST /health] body={json.dumps(payload, ensure_ascii=False)}", flush=True)
+
     day = _derive_date(payload)
     payload["date"] = day
     # 洗掉 Shortcut 传来的带时分的 "16 Apr 2026 at 10:25 am"，统一成 "16/04/2026"
