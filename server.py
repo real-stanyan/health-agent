@@ -53,7 +53,9 @@ async def ingest(request: Request) -> dict[str, Any]:
     # Shortcuts 隔天发送，Date 减一天还原为实际数据日期
     if "Date" in payload and payload["Date"]:
         try:
-            dt = datetime.strptime(payload["Date"], "%d %b %Y at %I:%M %p")
+            # iOS Shortcuts 用 narrow no-break space (\u202f) 分隔时间和 am/pm
+            date_str = payload["Date"].replace("\u202f", " ")
+            dt = datetime.strptime(date_str, "%d %b %Y at %I:%M %p")
             dt -= timedelta(days=1)
             payload["Date"] = dt.strftime("%-d %b %Y at %-I:%M %p").replace("AM", "am").replace("PM", "pm")
         except ValueError:
