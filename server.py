@@ -1,38 +1,42 @@
-"""Apple Health 数据接收服务 (FastAPI)."""
+"""Apple Health 本地代理服务：所有数据读写都走 Vercel API，不存本地。"""
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
-from pathlib import Path
+import os
+import urllib.request
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-DATA_FILE = ROOT / "health_data.json"
-TZ = ZoneInfo("Australia/Sydney")
+API_URL = os.environ.get("HEALTH_API_URL", "https://health-agent-alpha.vercel.app").rstrip("/")
+AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "aed8fbf9fbb2cb44dfcb826c1b3d42091c272fe0869ac473a1d6ce9a6ec8fcd2")
 
-app = FastAPI(title="Apple Health Monitor", version="0.1.0")
-
-
-def _load() -> list[dict[str, Any]]:
-    if not DATA_FILE.exists():
-        return []
-    try:
-        with DATA_FILE.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data
-        return []
-    except json.JSONDecodeError:
-        return []
+app = FastAPI(title="Apple Health Monitor (proxy)", version="0.3.0")
 
 
-def _save(records: list[dict[str, Any]]) -> None:
-    with DATA_FILE.open("w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
+def _proxy_get(path: str) -> Any:
+    req = urllib.request.Request(f"{API_URL}{path}")
+    if AUTH_TOKEN:
+        req.add_header("X-Auth-Token", AUTH_TOKEN)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _proxy_post(path: str, body: dict) -> Any:
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"{API_URL}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    if AUTH_TOKEN:
+        req.add_header("X-Auth-Token", AUTH_TOKEN)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 @app.post("/health")
@@ -41,53 +45,19 @@ async def ingest(request: Request) -> dict[str, Any]:
         payload = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid json: {e}")
-
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a JSON object")
-
-    if "timestamp" not in payload or not payload["timestamp"]:
-        payload["timestamp"] = datetime.now(TZ).isoformat()
-
-    payload["_received_at"] = datetime.now(TZ).isoformat()
-
-    # Shortcuts 隔天发送，Date 减一天还原为实际数据日期
-    if "Date" in payload and payload["Date"]:
-        original_date = payload["Date"]
-        import unicodedata
-        debug_chars = " ".join(f"U+{ord(c):04X}" for c in original_date)
-        print(f"[DEBUG] Original Date: {original_date!r}")
-        print(f"[DEBUG] Chars: {debug_chars}")
-        try:
-            # 统一所有 unicode 空格为普通空格
-            import re
-            date_str = re.sub(r'\s', ' ', payload["Date"])
-            dt = datetime.strptime(date_str, "%d %b %Y at %I:%M %p")
-            dt -= timedelta(days=1)
-            payload["Date"] = dt.strftime("%-d %b %Y at %-I:%M %p").replace("AM", "am").replace("PM", "pm")
-            print(f"[DEBUG] New Date: {payload['Date']!r}")
-        except ValueError as e:
-            print(f"[DEBUG] Parse failed: {e}")
-            pass  # 格式不匹配则保持原值
-
-    records = _load()
-    records.append(payload)
-    _save(records)
-
-    return {"ok": True, "count": len(records), "timestamp": payload["timestamp"]}
+    return _proxy_post("/health", payload)
 
 
 @app.get("/latest")
 def latest() -> dict[str, Any]:
-    records = _load()
-    if not records:
-        return {"ok": True, "record": None}
-    return {"ok": True, "record": records[-1]}
+    return _proxy_get("/latest")
 
 
 @app.get("/history")
 def history() -> dict[str, Any]:
-    records = _load()
-    return {"ok": True, "count": len(records), "records": records}
+    return _proxy_get("/history")
 
 
 @app.get("/dashboard")
@@ -97,4 +67,5 @@ def dashboard() -> FileResponse:
 
 @app.get("/")
 def root() -> dict[str, Any]:
-    return {"service": "apple-health-monitor", "endpoints": ["/health", "/latest", "/history", "/dashboard"]}
+    return {"service": "apple-health-monitor", "mode": "proxy", "upstream": API_URL,
+            "endpoints": ["/health", "/latest", "/history", "/dashboard"]}
