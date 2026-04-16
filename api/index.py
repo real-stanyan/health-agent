@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.request
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from dateutil import parser as dtparser
 from fastapi import FastAPI, Header, HTTPException, Request
 
 UPSTASH_URL = (
@@ -26,7 +28,7 @@ UPSTASH_TOKEN = (
 )
 AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "")
 TZ = ZoneInfo("Australia/Sydney")
-KEY = "health:records"
+KEY = "health:daily"  # Redis Hash: field=YYYY-MM-DD, value=merged JSON
 
 app = FastAPI(title="Apple Health Monitor", version="0.2.0")
 
@@ -56,6 +58,20 @@ def _check_auth(token: str | None) -> None:
         raise HTTPException(401, "unauthorized")
 
 
+def _derive_date(payload: dict[str, Any]) -> str:
+    """从 payload 推 YYYY-MM-DD：优先 Date 字段，其次 timestamp，最后用服务器当日。"""
+    raw = payload.get("Date") or payload.get("date") or payload.get("timestamp")
+    if raw:
+        try:
+            dt = dtparser.parse(str(raw), fuzzy=True)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=TZ)
+            return dt.astimezone(TZ).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return datetime.now(TZ).strftime("%Y-%m-%d")
+
+
 @app.post("/health")
 async def ingest(request: Request, x_auth_token: str | None = Header(None)) -> dict[str, Any]:
     _check_auth(x_auth_token)
@@ -66,28 +82,54 @@ async def ingest(request: Request, x_auth_token: str | None = Header(None)) -> d
     if not isinstance(payload, dict):
         raise HTTPException(400, "payload must be a JSON object")
 
+    day = _derive_date(payload)
+    payload["date"] = day
+    # 洗掉 Shortcut 传来的带时分的 "16 Apr 2026 at 10:25 am"，统一成 "16/04/2026"
+    try:
+        payload["Date"] = dtparser.parse(day).strftime("%d/%m/%Y")
+    except Exception:
+        payload.pop("Date", None)
     if not payload.get("timestamp"):
         payload["timestamp"] = datetime.now(TZ).isoformat()
     payload["_received_at"] = datetime.now(TZ).isoformat()
 
-    _upstash(["RPUSH", KEY, json.dumps(payload, ensure_ascii=False)])
-    count = _upstash(["LLEN", KEY])
-    return {"ok": True, "count": count, "timestamp": payload["timestamp"]}
+    # 合并：读当日已有记录 → 浅合并 → 写回
+    existing_raw = _upstash(["HGET", KEY, day])
+    merged = json.loads(existing_raw) if existing_raw else {}
+    merged.update(payload)
+
+    _upstash(["HSET", KEY, day, json.dumps(merged, ensure_ascii=False)])
+    total_days = _upstash(["HLEN", KEY])
+    return {"ok": True, "date": day, "days_total": total_days, "fields": sorted(merged.keys())}
+
+
+def _load_all_sorted() -> list[dict[str, Any]]:
+    raw = _upstash(["HGETALL", KEY]) or []
+    # Upstash HGETALL returns [field1, value1, field2, value2, ...]
+    pairs = [(raw[i], raw[i + 1]) for i in range(0, len(raw), 2)]
+    records = []
+    for day, value in pairs:
+        try:
+            r = json.loads(value)
+        except Exception:
+            continue
+        r.setdefault("date", day)
+        records.append(r)
+    records.sort(key=lambda r: r.get("date", ""))
+    return records
 
 
 @app.get("/latest")
 def latest(x_auth_token: str | None = Header(None)) -> dict[str, Any]:
     _check_auth(x_auth_token)
-    items = _upstash(["LRANGE", KEY, -1, -1]) or []
-    record = json.loads(items[0]) if items else None
-    return {"ok": True, "record": record}
+    records = _load_all_sorted()
+    return {"ok": True, "record": records[-1] if records else None}
 
 
 @app.get("/history")
 def history(x_auth_token: str | None = Header(None)) -> dict[str, Any]:
     _check_auth(x_auth_token)
-    items = _upstash(["LRANGE", KEY, 0, -1]) or []
-    records = [json.loads(r) for r in items]
+    records = _load_all_sorted()
     return {"ok": True, "count": len(records), "records": records}
 
 
