@@ -263,23 +263,50 @@ function drawSleepTimeline(canvasId, raw) {
   ctx.stroke();
 
   // time axis
-  const span = maxT - minT;
   const hourMs = 3600000;
   const firstHour = Math.ceil(minT / hourMs) * hourMs;
+  const timeFmt = t => new Date(t).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true });
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8b8fa3';
   ctx.font = '11px -apple-system, sans-serif';
+
+  // start time marker
+  const startX = toX(minT);
+  ctx.fillStyle = '#e1e4ed';
+  ctx.fillText(timeFmt(minT), startX, H - pad.bottom + 16);
+  ctx.beginPath();
+  ctx.strokeStyle = '#8b8fa355';
+  ctx.setLineDash([3, 3]);
+  ctx.moveTo(startX, pad.top);
+  ctx.lineTo(startX, pad.top + chartH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // hourly ticks (skip if too close to start/end)
+  ctx.fillStyle = '#8b8fa3';
   for (let t = firstHour; t <= maxT; t += hourMs) {
     const x = toX(t);
+    if (Math.abs(x - startX) < 40) continue;
+    if (Math.abs(x - toX(maxT)) < 40) continue;
     ctx.beginPath();
     ctx.strokeStyle = '#2a2d3a44';
     ctx.moveTo(x, pad.top);
     ctx.lineTo(x, pad.top + chartH);
     ctx.stroke();
-    const d = new Date(t);
-    const label = d.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true });
-    ctx.fillText(label, x, H - pad.bottom + 16);
+    ctx.fillText(timeFmt(t), x, H - pad.bottom + 16);
   }
+
+  // end time marker
+  const endX = toX(maxT);
+  ctx.fillStyle = '#e1e4ed';
+  ctx.fillText(timeFmt(maxT), endX, H - pad.bottom + 16);
+  ctx.beginPath();
+  ctx.strokeStyle = '#8b8fa355';
+  ctx.setLineDash([3, 3]);
+  ctx.moveTo(endX, pad.top);
+  ctx.lineTo(endX, pad.top + chartH);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
   // segments
   for (const seg of segs) {
