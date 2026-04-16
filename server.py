@@ -52,13 +52,21 @@ async def ingest(request: Request) -> dict[str, Any]:
 
     # Shortcuts 隔天发送，Date 减一天还原为实际数据日期
     if "Date" in payload and payload["Date"]:
+        original_date = payload["Date"]
+        import unicodedata
+        debug_chars = " ".join(f"U+{ord(c):04X}" for c in original_date)
+        print(f"[DEBUG] Original Date: {original_date!r}")
+        print(f"[DEBUG] Chars: {debug_chars}")
         try:
-            # iOS Shortcuts 用 narrow no-break space (\u202f) 分隔时间和 am/pm
-            date_str = payload["Date"].replace("\u202f", " ")
+            # 统一所有 unicode 空格为普通空格
+            import re
+            date_str = re.sub(r'\s', ' ', payload["Date"])
             dt = datetime.strptime(date_str, "%d %b %Y at %I:%M %p")
             dt -= timedelta(days=1)
             payload["Date"] = dt.strftime("%-d %b %Y at %-I:%M %p").replace("AM", "am").replace("PM", "pm")
-        except ValueError:
+            print(f"[DEBUG] New Date: {payload['Date']!r}")
+        except ValueError as e:
+            print(f"[DEBUG] Parse failed: {e}")
             pass  # 格式不匹配则保持原值
 
     records = _load()

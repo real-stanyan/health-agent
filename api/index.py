@@ -9,7 +9,7 @@ import json
 import os
 import re
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -80,17 +80,19 @@ def _normalize_numeric_lists(obj: Any) -> Any:
 
 
 def _derive_date(payload: dict[str, Any]) -> str:
-    """从 payload 推 YYYY-MM-DD：优先 Date 字段，其次 timestamp，最后用服务器当日。"""
+    """从 payload 推 YYYY-MM-DD：优先 Date 字段，其次 timestamp，最后用服务器当日。
+    Shortcuts 隔天发送，所以解析后减一天还原为实际数据日期。"""
     raw = payload.get("Date") or payload.get("date") or payload.get("timestamp")
     if raw:
         try:
             dt = dtparser.parse(str(raw), fuzzy=True)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=TZ)
+            dt -= timedelta(days=1)
             return dt.astimezone(TZ).strftime("%Y-%m-%d")
         except Exception:
             pass
-    return datetime.now(TZ).strftime("%Y-%m-%d")
+    return (datetime.now(TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 @app.post("/health")
