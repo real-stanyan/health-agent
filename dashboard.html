@@ -331,12 +331,12 @@ function drawSleepTimeline(canvasId, raw) {
   }
 }
 
-function renderStats(records) {
-  const latest = records[records.length - 1];
-  const sleep = parseSleepRaw(latest?.sleep_raw);
-  const hr = latest?.Heart_Rate || {};
-  const spo2 = latest?.Blood_Oxygen || {};
-  const kcal = latest?.Active_Kcal;
+function renderStats(records, selectedRecord) {
+  const rec = selectedRecord || records[records.length - 1];
+  const sleep = parseSleepRaw(rec?.sleep_raw);
+  const hr = rec?.Heart_Rate || {};
+  const spo2 = rec?.Blood_Oxygen || {};
+  const kcal = rec?.Active_Kcal;
 
   const items = [];
   if (sleep) items.push({ label: 'Sleep', value: sleep.total.toFixed(1) + 'h', sub: `Total ${sleep.totalWithAwake.toFixed(1)}h incl. awake`, color: var_color('accent') });
@@ -522,6 +522,10 @@ function showDetail(date) {
   const rec = allRecords.find(r => r.date === date);
   if (!rec) return;
   const c = chartColors();
+
+  // Update stats and header for selected date
+  renderStats(allRecords, rec);
+  document.getElementById('headerDate').textContent = `Viewing: ${date}`;
 
   // Sleep timeline
   if (rec.sleep_raw) {
