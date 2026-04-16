@@ -107,6 +107,12 @@ async def ingest(request: Request, x_auth_token: str | None = Header(None)) -> d
 
     payload = _normalize_numeric_lists(payload)
 
+    hr = payload.get("Heart_Rate") or payload.get("heart_rate") or {}
+    if isinstance(hr, dict) and "HR_SERIES" in hr and "HR_TIMESTAMPS" in hr:
+        ns, nt = len(hr["HR_SERIES"]), len(hr["HR_TIMESTAMPS"])
+        if ns != nt:
+            print(f"[WARN] HR array length mismatch: series={ns} timestamps={nt}", flush=True)
+
     day = _derive_date(payload)
     payload["date"] = day
     # 洗掉 Shortcut 传来的带时分的 "16 Apr 2026 at 10:25 am"，统一成 "16/04/2026"
