@@ -331,8 +331,7 @@ function drawSleepTimeline(canvasId, raw) {
   }
 }
 
-function renderStats(records, selectedRecord) {
-  const rec = selectedRecord || records[records.length - 1];
+function renderStats(rec) {
   const sleep = parseSleepRaw(rec?.sleep_raw);
   const hr = rec?.Heart_Rate || {};
   const spo2 = rec?.Blood_Oxygen || {};
@@ -343,15 +342,14 @@ function renderStats(records, selectedRecord) {
   if (hr.HR_AVG) items.push({ label: 'Avg Heart Rate', value: Math.round(hr.HR_AVG) + '', sub: `${hr.HR_MIN}–${hr.HR_MAX} bpm`, color: var_color('red') });
   if (spo2.SPO2_AVG) items.push({ label: 'Avg SpO₂', value: spo2.SPO2_AVG.toFixed(1) + '%', sub: `Min ${spo2.SPO2_MIN}%`, color: var_color('cyan') });
   if (kcal != null) items.push({ label: 'Active Calories', value: Math.round(kcal) + '', sub: kcal >= 500 ? 'Goal met ✓' : `${Math.round(500 - kcal)} to goal`, color: kcal >= 500 ? var_color('green') : var_color('orange') });
-  items.push({ label: 'Days Tracked', value: records.length + '', sub: records.length > 1 ? `${records[0].date} – ${records[records.length-1].date}` : '', color: var_color('muted') });
 
-  document.getElementById('statsRow').innerHTML = items.map(i => `
+  document.getElementById('statsRow').innerHTML = items.length > 0 ? items.map(i => `
     <div class="stat-card">
       <div class="label">${i.label}</div>
       <div class="value" style="color:${i.color}">${i.value}</div>
       <div class="sub">${i.sub}</div>
     </div>
-  `).join('');
+  `).join('') : '<div style="color:var(--muted);padding:8px">No data for this date</div>';
 }
 
 function var_color(name) {
@@ -389,162 +387,99 @@ function baseOpts(title) {
   };
 }
 
-function renderTrendCharts(records) {
-  const c = chartColors();
-  const dates = records.map(r => r.date);
-
-  const grid = document.getElementById('chartsGrid');
-  grid.innerHTML = `
-    <div class="chart-card" id="sleepTimelineCard" style="grid-column: 1 / -1"><h3>Sleep Timeline — <span id="sleepTimelineDate"></span></h3><div style="height:220px"><canvas id="sleepTimeline"></canvas></div></div>
-    <div class="chart-card"><h3>Sleep Hours Trend</h3><div style="height:260px"><canvas id="sleepChart"></canvas></div></div>
-    <div class="chart-card"><h3>Heart Rate Trend</h3><div style="height:260px"><canvas id="hrChart"></canvas></div></div>
-    <div class="chart-card"><h3>Blood Oxygen Trend</h3><div style="height:260px"><canvas id="spo2Chart"></canvas></div></div>
-    <div class="chart-card"><h3>Active Calories</h3><div style="height:260px"><canvas id="kcalChart"></canvas></div></div>
-    <div class="chart-card" id="hrDetailCard" style="display:none"><h3>Heart Rate Detail — <span id="hrDetailDate"></span></h3><div style="height:300px"><canvas id="hrDetailChart"></canvas></div></div>
-    <div class="chart-card" id="spo2DetailCard" style="display:none"><h3>SpO₂ Detail — <span id="spo2DetailDate"></span></h3><div style="height:300px"><canvas id="spo2DetailChart"></canvas></div></div>
-  `;
-
-  // Sleep timeline for latest day
-  const latestWithSleep = [...records].reverse().find(r => r.sleep_raw);
-  if (latestWithSleep) {
-    document.getElementById('sleepTimelineDate').textContent = latestWithSleep.date;
-    drawSleepTimeline('sleepTimeline', latestWithSleep.sleep_raw);
-  }
-
-  // Sleep hours trend bar
-  const sleepData = records.map(r => parseSleepRaw(r.sleep_raw));
-  charts.sleep = new Chart(document.getElementById('sleepChart'), {
-    type: 'bar',
-    data: {
-      labels: dates,
-      datasets: [
-        { label: 'Deep', data: sleepData.map(s => s?.deep || 0), backgroundColor: '#7c3aed' },
-        { label: 'Core', data: sleepData.map(s => s?.core || 0), backgroundColor: c.blue },
-        { label: 'REM', data: sleepData.map(s => s?.rem || 0), backgroundColor: c.cyan },
-        { label: 'Awake', data: sleepData.map(s => s?.awake || 0), backgroundColor: c.muted + '88' },
-      ],
-    },
-    options: { ...baseOpts(), scales: { ...baseOpts().scales, x: { ...baseOpts().scales.x, stacked: true }, y: { ...baseOpts().scales.y, stacked: true, title: { display: true, text: 'Hours', color: c.muted } } } },
-  });
-
-  // HR trend
-  const hrAvg = records.map(r => r.Heart_Rate?.HR_AVG ?? null);
-  const hrMax = records.map(r => r.Heart_Rate?.HR_MAX ?? null);
-  const hrMin = records.map(r => r.Heart_Rate?.HR_MIN ?? null);
-  charts.hr = new Chart(document.getElementById('hrChart'), {
-    type: 'line',
-    data: {
-      labels: dates,
-      datasets: [
-        { label: 'Avg', data: hrAvg, borderColor: c.red, backgroundColor: c.red + '22', fill: false, tension: 0.3 },
-        { label: 'Max', data: hrMax, borderColor: c.orange, borderDash: [4,4], fill: false, tension: 0.3 },
-        { label: 'Min', data: hrMin, borderColor: c.blue, borderDash: [4,4], fill: false, tension: 0.3 },
-      ],
-    },
-    options: { ...baseOpts(), scales: { ...baseOpts().scales, y: { ...baseOpts().scales.y, title: { display: true, text: 'BPM', color: c.muted } } } },
-  });
-
-  // SpO2 trend
-  const spo2Avg = records.map(r => r.Blood_Oxygen?.SPO2_AVG ?? null);
-  const spo2Min = records.map(r => r.Blood_Oxygen?.SPO2_MIN ?? null);
-  charts.spo2 = new Chart(document.getElementById('spo2Chart'), {
-    type: 'line',
-    data: {
-      labels: dates,
-      datasets: [
-        { label: 'Avg', data: spo2Avg, borderColor: c.cyan, fill: false, tension: 0.3 },
-        { label: 'Min', data: spo2Min, borderColor: c.pink, borderDash: [4,4], fill: false, tension: 0.3 },
-      ],
-    },
-    options: { ...baseOpts(), scales: { ...baseOpts().scales, y: { ...baseOpts().scales.y, min: 90, max: 100, title: { display: true, text: '%', color: c.muted } } } },
-  });
-
-  // Kcal bar
-  const kcals = records.map(r => r.Active_Kcal ?? 0);
-  charts.kcal = new Chart(document.getElementById('kcalChart'), {
-    type: 'bar',
-    data: {
-      labels: dates,
-      datasets: [
-        { label: 'Active kcal', data: kcals, backgroundColor: kcals.map(k => k >= 500 ? c.green + 'cc' : c.orange + 'cc'), borderRadius: 4 },
-      ],
-    },
-    options: {
-      ...baseOpts(),
-      plugins: {
-        ...baseOpts().plugins,
-        annotation: undefined,
-      },
-      scales: {
-        ...baseOpts().scales,
-        y: { ...baseOpts().scales.y, title: { display: true, text: 'kcal', color: c.muted } },
-      },
-    },
-    plugins: [{
-      id: 'goalLine',
-      afterDraw(chart) {
-        const y = chart.scales.y.getPixelForValue(500);
-        const ctx = chart.ctx;
-        ctx.save();
-        ctx.strokeStyle = c.red;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([6, 4]);
-        ctx.beginPath();
-        ctx.moveTo(chart.chartArea.left, y);
-        ctx.lineTo(chart.chartArea.right, y);
-        ctx.stroke();
-        ctx.fillStyle = c.red;
-        ctx.font = '11px sans-serif';
-        ctx.fillText('Goal 500', chart.chartArea.right - 52, y - 5);
-        ctx.restore();
-      }
-    }],
-  });
-
-  // Day picker for detail charts
-  renderDayPicker(records);
-}
-
-function renderDayPicker(records) {
+function renderDayPicker(records, selectedDate) {
   const picker = document.getElementById('dayPicker');
-  const withDetail = records.filter(r => r.sleep_raw || r.Heart_Rate?.HR_SERIES?.length > 0);
-  if (withDetail.length === 0) {
+  if (records.length <= 1) {
     picker.innerHTML = '';
     return;
   }
-  picker.innerHTML = '<span class="label">Detail view:</span>' + withDetail.map(r =>
-    `<button class="day-btn" onclick="showDetail('${r.date}')">${r.date}</button>`
+  picker.innerHTML = '<span class="label">Date:</span>' + records.map(r =>
+    `<button class="day-btn${r.date === selectedDate ? ' active' : ''}" onclick="showDay('${r.date}')">${r.date}</button>`
   ).join('');
 }
 
-function showDetail(date) {
-  document.querySelectorAll('.day-btn').forEach(b => b.classList.toggle('active', b.textContent === date));
+function destroyAllCharts() {
+  Object.values(charts).forEach(c => { try { c.destroy(); } catch {} });
+  charts = {};
+}
+
+function showDay(date) {
   const rec = allRecords.find(r => r.date === date);
   if (!rec) return;
-  const c = chartColors();
 
-  // Update stats and header for selected date
-  renderStats(allRecords, rec);
-  document.getElementById('headerDate').textContent = `Viewing: ${date}`;
+  document.getElementById('headerDate').textContent = date;
+  renderDayPicker(allRecords, date);
+  renderStats(rec);
+  destroyAllCharts();
+
+  const c = chartColors();
+  const grid = document.getElementById('chartsGrid');
+  const sections = [];
 
   // Sleep timeline
   if (rec.sleep_raw) {
-    document.getElementById('sleepTimelineDate').textContent = date;
-    drawSleepTimeline('sleepTimeline', rec.sleep_raw);
+    sections.push('<div class="chart-card" style="grid-column: 1 / -1"><h3>Sleep Timeline</h3><div style="height:220px"><canvas id="sleepTimeline"></canvas></div></div>');
+  }
+
+  // Sleep breakdown donut
+  const sleep = parseSleepRaw(rec.sleep_raw);
+  if (sleep) {
+    sections.push('<div class="chart-card"><h3>Sleep Breakdown</h3><div style="height:260px"><canvas id="sleepDonut"></canvas></div></div>');
   }
 
   // HR detail
   const hr = rec.Heart_Rate || {};
   if (hr.HR_SERIES?.length > 0) {
-    document.getElementById('hrDetailCard').style.display = '';
-    document.getElementById('hrDetailDate').textContent = date;
+    sections.push('<div class="chart-card"><h3>Heart Rate</h3><div style="height:260px"><canvas id="hrChart"></canvas></div></div>');
+  }
+
+  // SpO2 detail
+  const spo2 = rec.Blood_Oxygen || {};
+  if (spo2.SPO2_SERIES?.length > 0) {
+    sections.push('<div class="chart-card"><h3>Blood Oxygen</h3><div style="height:260px"><canvas id="spo2Chart"></canvas></div></div>');
+  }
+
+  if (sections.length === 0) {
+    grid.innerHTML = '<div style="color:var(--muted);padding:32px;text-align:center">No chart data for this date</div>';
+    return;
+  }
+  grid.innerHTML = sections.join('');
+
+  // Draw sleep timeline
+  if (rec.sleep_raw) {
+    drawSleepTimeline('sleepTimeline', rec.sleep_raw);
+  }
+
+  // Draw sleep donut
+  if (sleep) {
+    charts.sleepDonut = new Chart(document.getElementById('sleepDonut'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Deep', 'Core', 'REM', 'Awake'],
+        datasets: [{
+          data: [sleep.deep, sleep.core, sleep.rem, sleep.awake],
+          backgroundColor: ['#7c3aed', c.blue, c.cyan, c.muted + '88'],
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: c.text, padding: 12 } },
+          tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.parsed.toFixed(1)}h` } },
+        },
+      },
+    });
+  }
+
+  // Draw HR chart
+  if (hr.HR_SERIES?.length > 0) {
     const labels = (hr.HR_TIMESTAMPS || []).map(t => {
       try { return new Date(t).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }); }
       catch { return t; }
     });
     if (labels.length === 0) hr.HR_SERIES.forEach((_, i) => labels.push(i));
-    if (charts.hrDetail) charts.hrDetail.destroy();
-    charts.hrDetail = new Chart(document.getElementById('hrDetailChart'), {
+    charts.hr = new Chart(document.getElementById('hrChart'), {
       type: 'line',
       data: {
         labels,
@@ -554,17 +489,13 @@ function showDetail(date) {
     });
   }
 
-  // SpO2 detail
-  const spo2 = rec.Blood_Oxygen || {};
+  // Draw SpO2 chart
   if (spo2.SPO2_SERIES?.length > 0) {
-    document.getElementById('spo2DetailCard').style.display = '';
-    document.getElementById('spo2DetailDate').textContent = date;
     const labels = (spo2.SPO2_TIMESTAMPS || []).map(t => {
       try { return new Date(t).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }); }
       catch { return t; }
     });
-    if (charts.spo2Detail) charts.spo2Detail.destroy();
-    charts.spo2Detail = new Chart(document.getElementById('spo2DetailChart'), {
+    charts.spo2 = new Chart(document.getElementById('spo2Chart'), {
       type: 'line',
       data: {
         labels,
@@ -594,16 +525,12 @@ async function init() {
     }
     document.getElementById('app').innerHTML = `
       <div class="header"><h1>Health Dashboard</h1><span class="date" id="headerDate"></span></div>
-      <div class="stats" id="statsRow"></div>
       <div class="day-picker" id="dayPicker"></div>
+      <div class="stats" id="statsRow"></div>
       <div class="charts" id="chartsGrid"></div>
     `;
     const latest = allRecords[allRecords.length - 1];
-    document.getElementById('headerDate').textContent = `Latest: ${latest.date}`;
-    renderStats(allRecords);
-    renderTrendCharts(allRecords);
-    const lastDetail = [...allRecords].reverse().find(r => r.sleep_raw || r.Heart_Rate?.HR_SERIES?.length > 0);
-    if (lastDetail) showDetail(lastDetail.date);
+    showDay(latest.date);
   } catch (e) {
     if (e.message.includes('401')) {
       localStorage.removeItem(TOKEN_KEY);
