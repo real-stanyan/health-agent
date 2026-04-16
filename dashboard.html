@@ -179,27 +179,127 @@ async function fetchData(token) {
   return records;
 }
 
-function parseSleepRaw(raw) {
+function parseSleepSegments(raw) {
   if (!raw) return null;
-  const stages = { core: 0, deep: 0, rem: 0, awake: 0 };
+  const segments = [];
   for (const line of raw.split('\n')) {
-    const sm = line.match(/^\[(\w+)\]/i);
-    const dm = line.match(/\[(\d+(?::\d+){1,2})\]\s*$/);
-    if (!sm || !dm) continue;
-    const stage = sm[1].toLowerCase();
-    const parts = dm[1].split(':').map(Number);
-    let secs;
-    if (parts.length === 3) secs = parts[0]*3600 + parts[1]*60 + parts[2];
-    else if (parts.length === 2) secs = parts[0]*60 + parts[1];
-    else secs = parts[0];
-    const hrs = secs / 3600;
-    if (stage in stages) stages[stage] += hrs;
-    else if (stage === 'asleep' || stage === 'inbed') { /* skip compound */ }
+    const m = line.match(/^\[(\w+)\]\s*\|\s*\[(.+?)\]\s*-\s*\[(.+?)\]/);
+    if (!m) continue;
+    const stage = m[1].toLowerCase();
+    if (stage === 'asleep' || stage === 'inbed') continue;
+    const start = new Date(m[2].replace(/\u202f/g, ' '));
+    const end = new Date(m[3].replace(/\u202f/g, ' '));
+    if (isNaN(start) || isNaN(end)) continue;
+    segments.push({ stage, start, end });
+  }
+  return segments.length > 0 ? segments : null;
+}
+
+function parseSleepRaw(raw) {
+  const segs = parseSleepSegments(raw);
+  if (!segs) return null;
+  const stages = { core: 0, deep: 0, rem: 0, awake: 0 };
+  for (const s of segs) {
+    const hrs = (s.end - s.start) / 3600000;
+    if (s.stage in stages) stages[s.stage] += hrs;
     else stages.core += hrs;
   }
   stages.total = stages.core + stages.deep + stages.rem;
   stages.totalWithAwake = stages.total + stages.awake;
   return stages;
+}
+
+const SLEEP_STAGES = ['Awake', 'REM', 'Core', 'Deep'];
+const SLEEP_COLORS = { awake: '#f87171', rem: '#22d3ee', core: '#60a5fa', deep: '#7c3aed' };
+
+function drawSleepTimeline(canvasId, raw) {
+  const segs = parseSleepSegments(raw);
+  if (!segs || segs.length === 0) return;
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  const minT = Math.min(...segs.map(s => s.start.getTime()));
+  const maxT = Math.max(...segs.map(s => s.end.getTime()));
+  const pad = { left: 60, right: 16, top: 12, bottom: 32 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const bandH = chartH / 4;
+
+  const toX = t => pad.left + ((t - minT) / (maxT - minT)) * chartW;
+  const stageY = stage => {
+    const idx = SLEEP_STAGES.indexOf(stage.charAt(0).toUpperCase() + stage.slice(1));
+    return pad.top + (idx >= 0 ? idx : 0) * bandH;
+  };
+
+  ctx.clearRect(0, 0, W, H);
+
+  // grid lines and labels
+  ctx.strokeStyle = '#2a2d3a';
+  ctx.lineWidth = 0.5;
+  ctx.fillStyle = '#8b8fa3';
+  ctx.font = '12px -apple-system, sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i < 4; i++) {
+    const y = pad.top + i * bandH + bandH / 2;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top + i * bandH);
+    ctx.lineTo(W - pad.right, pad.top + i * bandH);
+    ctx.stroke();
+    ctx.fillText(SLEEP_STAGES[i], pad.left - 8, y + 4);
+  }
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top + 4 * bandH);
+  ctx.lineTo(W - pad.right, pad.top + 4 * bandH);
+  ctx.stroke();
+
+  // time axis
+  const span = maxT - minT;
+  const hourMs = 3600000;
+  const firstHour = Math.ceil(minT / hourMs) * hourMs;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8b8fa3';
+  ctx.font = '11px -apple-system, sans-serif';
+  for (let t = firstHour; t <= maxT; t += hourMs) {
+    const x = toX(t);
+    ctx.beginPath();
+    ctx.strokeStyle = '#2a2d3a44';
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + chartH);
+    ctx.stroke();
+    const d = new Date(t);
+    const label = d.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true });
+    ctx.fillText(label, x, H - pad.bottom + 16);
+  }
+
+  // segments
+  for (const seg of segs) {
+    const x1 = toX(seg.start.getTime());
+    const x2 = toX(seg.end.getTime());
+    const y = stageY(seg.stage);
+    const color = SLEEP_COLORS[seg.stage] || '#60a5fa';
+    const w = Math.max(x2 - x1, 2);
+    const barH = bandH * 0.6;
+    const barY = y + (bandH - barH) / 2;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x1, barY, w, barH, 3);
+    ctx.fill();
+
+    ctx.fillStyle = color + '33';
+    ctx.beginPath();
+    ctx.roundRect(x1, barY - 2, w, barH + 4, 4);
+    ctx.fill();
+  }
 }
 
 function renderStats(records) {
@@ -266,7 +366,8 @@ function renderTrendCharts(records) {
 
   const grid = document.getElementById('chartsGrid');
   grid.innerHTML = `
-    <div class="chart-card"><h3>Sleep Breakdown</h3><div style="height:260px"><canvas id="sleepChart"></canvas></div></div>
+    <div class="chart-card" id="sleepTimelineCard" style="grid-column: 1 / -1"><h3>Sleep Timeline — <span id="sleepTimelineDate"></span></h3><div style="height:220px"><canvas id="sleepTimeline"></canvas></div></div>
+    <div class="chart-card"><h3>Sleep Hours Trend</h3><div style="height:260px"><canvas id="sleepChart"></canvas></div></div>
     <div class="chart-card"><h3>Heart Rate Trend</h3><div style="height:260px"><canvas id="hrChart"></canvas></div></div>
     <div class="chart-card"><h3>Blood Oxygen Trend</h3><div style="height:260px"><canvas id="spo2Chart"></canvas></div></div>
     <div class="chart-card"><h3>Active Calories</h3><div style="height:260px"><canvas id="kcalChart"></canvas></div></div>
@@ -274,14 +375,21 @@ function renderTrendCharts(records) {
     <div class="chart-card" id="spo2DetailCard" style="display:none"><h3>SpO₂ Detail — <span id="spo2DetailDate"></span></h3><div style="height:300px"><canvas id="spo2DetailChart"></canvas></div></div>
   `;
 
-  // Sleep stacked bar
+  // Sleep timeline for latest day
+  const latestWithSleep = [...records].reverse().find(r => r.sleep_raw);
+  if (latestWithSleep) {
+    document.getElementById('sleepTimelineDate').textContent = latestWithSleep.date;
+    drawSleepTimeline('sleepTimeline', latestWithSleep.sleep_raw);
+  }
+
+  // Sleep hours trend bar
   const sleepData = records.map(r => parseSleepRaw(r.sleep_raw));
   charts.sleep = new Chart(document.getElementById('sleepChart'), {
     type: 'bar',
     data: {
       labels: dates,
       datasets: [
-        { label: 'Deep', data: sleepData.map(s => s?.deep || 0), backgroundColor: c.accent },
+        { label: 'Deep', data: sleepData.map(s => s?.deep || 0), backgroundColor: '#7c3aed' },
         { label: 'Core', data: sleepData.map(s => s?.core || 0), backgroundColor: c.blue },
         { label: 'REM', data: sleepData.map(s => s?.rem || 0), backgroundColor: c.cyan },
         { label: 'Awake', data: sleepData.map(s => s?.awake || 0), backgroundColor: c.muted + '88' },
@@ -370,12 +478,12 @@ function renderTrendCharts(records) {
 
 function renderDayPicker(records) {
   const picker = document.getElementById('dayPicker');
-  const withHR = records.filter(r => r.Heart_Rate?.HR_SERIES?.length > 0);
-  if (withHR.length === 0) {
+  const withDetail = records.filter(r => r.sleep_raw || r.Heart_Rate?.HR_SERIES?.length > 0);
+  if (withDetail.length === 0) {
     picker.innerHTML = '';
     return;
   }
-  picker.innerHTML = '<span class="label">Detail view:</span>' + withHR.map(r =>
+  picker.innerHTML = '<span class="label">Detail view:</span>' + withDetail.map(r =>
     `<button class="day-btn" onclick="showDetail('${r.date}')">${r.date}</button>`
   ).join('');
 }
@@ -385,6 +493,12 @@ function showDetail(date) {
   const rec = allRecords.find(r => r.date === date);
   if (!rec) return;
   const c = chartColors();
+
+  // Sleep timeline
+  if (rec.sleep_raw) {
+    document.getElementById('sleepTimelineDate').textContent = date;
+    drawSleepTimeline('sleepTimeline', rec.sleep_raw);
+  }
 
   // HR detail
   const hr = rec.Heart_Rate || {};
@@ -455,9 +569,8 @@ async function init() {
     document.getElementById('headerDate').textContent = `Latest: ${latest.date}`;
     renderStats(allRecords);
     renderTrendCharts(allRecords);
-    if (allRecords.some(r => r.Heart_Rate?.HR_SERIES?.length > 0)) {
-      showDetail(allRecords[allRecords.length - 1].date);
-    }
+    const lastDetail = [...allRecords].reverse().find(r => r.sleep_raw || r.Heart_Rate?.HR_SERIES?.length > 0);
+    if (lastDetail) showDetail(lastDetail.date);
   } catch (e) {
     if (e.message.includes('401')) {
       localStorage.removeItem(TOKEN_KEY);
