@@ -166,10 +166,69 @@ def history(x_auth_token: str | None = Header(None)) -> dict[str, Any]:
     return {"ok": True, "count": len(records), "records": records}
 
 
+BODY_KEY = "health:body"  # Redis Hash: field=YYYY-MM-DD, value=JSON
+
+
+@app.post("/bodymeasurement")
+async def body_measurement(request: Request, x_auth_token: str | None = Header(None)) -> dict[str, Any]:
+    _check_auth(x_auth_token)
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(400, f"invalid json: {e}")
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "payload must be a JSON object")
+
+    print(f"[POST /bodymeasurement] body={json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+    # date 必须带上
+    date = payload.get("date") or payload.get("Date")
+    if not date:
+        raise HTTPException(400, "missing 'date' field (YYYY-MM-DD)")
+    # 规范化日期格式
+    try:
+        date = dtparser.parse(str(date), fuzzy=True).strftime("%Y-%m-%d")
+    except Exception:
+        raise HTTPException(400, f"invalid date: {date}")
+
+    # 数值标准化
+    record = {"date": date, "_received_at": datetime.now(TZ).isoformat()}
+    for field in ("body_fat", "lean_body_mass", "weight", "bmi"):
+        val = payload.get(field)
+        if val is not None:
+            record[field] = _to_number(val)
+
+    # 合并到当日已有记录（不覆盖旧天数据）
+    existing_raw = _upstash(["HGET", BODY_KEY, date])
+    merged = json.loads(existing_raw) if existing_raw else {}
+    merged.update(record)
+
+    _upstash(["HSET", BODY_KEY, date, json.dumps(merged, ensure_ascii=False)])
+    total_days = _upstash(["HLEN", BODY_KEY])
+    return {"ok": True, "date": date, "days_total": total_days, "record": merged}
+
+
+@app.get("/bodymeasurement")
+def body_measurement_history(x_auth_token: str | None = Header(None)) -> dict[str, Any]:
+    _check_auth(x_auth_token)
+    raw = _upstash(["HGETALL", BODY_KEY]) or []
+    pairs = [(raw[i], raw[i + 1]) for i in range(0, len(raw), 2)]
+    records = []
+    for day, value in pairs:
+        try:
+            r = json.loads(value)
+        except Exception:
+            continue
+        r.setdefault("date", day)
+        records.append(r)
+    records.sort(key=lambda r: r.get("date", ""))
+    return {"ok": True, "count": len(records), "records": records}
+
+
 @app.get("/")
 def root() -> dict[str, Any]:
     return {
         "service": "apple-health-monitor",
         "version": "0.2.0",
-        "endpoints": ["/health", "/latest", "/history"],
+        "endpoints": ["/health", "/latest", "/history", "/bodymeasurement"],
     }
